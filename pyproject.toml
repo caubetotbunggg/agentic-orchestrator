@@ -12,5 +12,6 @@ dependencies = [
     "pillow>=12.1.0",
     "pydantic>=2.12.5",
     "pytesseract>=0.3.13",
+    "python-multipart>=0.0.22",
     "uvicorn>=0.40.0",
 ]
