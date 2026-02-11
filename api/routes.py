@@ -1,42 +1,64 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi import APIRouter, UploadFile, File, HTTPException, Form
+from fastapi.responses import StreamingResponse
 from typing import List
+import io
 from .schemas import LayoutResponse, OCRResponse, TranslateResponse, LayoutRegion, OCRTextItem
+from engine.services import detect_layout_service, ocr_service, crop_service, translate_service
 
 router = APIRouter()
 
 @router.post("/layout-detect", response_model=LayoutResponse, summary="Detect layout regions in an image")
 async def detect_layout(file: UploadFile = File(...)):
     """
-    Detects layout regions (tables, figures, etc.) in the uploaded image.
+    Detects layout regions using PP-DocLayoutV2 (via PP-Structure).
     """
-    # TODO: Implement actual layout detection logic
-    # Mock response for now
-    return LayoutResponse(
-        regions=[
-            LayoutRegion(type="table", bbox=(10, 10, 200, 200), confidence=0.95),
-            LayoutRegion(type="text", bbox=(10, 210, 200, 300), confidence=0.98),
-        ]
-    )
+    content = await file.read()
+    try:
+        regions = detect_layout_service(content)
+        return LayoutResponse(regions=regions)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/ocr", response_model=OCRResponse, summary="Extract text from an image")
 async def perform_ocr(file: UploadFile = File(...)):
     """
-    Extracts text from the uploaded image using OCR.
+    Extracts text from the uploaded image using PP-OCRv5 (standardized to PP-OCRv4/latest).
     """
-    # TODO: Implement actual OCR logic
-    # Mock response for now
-    return OCRResponse(
-        texts=[
-            OCRTextItem(text="Sample Text", bbox=(50, 50, 100, 80), confidence=0.99)
-        ]
-    )
+    content = await file.read()
+    try:
+        texts = ocr_service(content)
+        return OCRResponse(texts=texts)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/translate", response_model=TranslateResponse, summary="Translate text/file")
-async def translate_content(file: UploadFile = File(...)):
+async def translate_content(
+    file: UploadFile = File(...), 
+    src_lang: str = Form("eng_Latn", description="Source language code (NLLB)"),
+    tgt_lang: str = Form("vie_Latn", description="Target language code (NLLB)")
+):
     """
-    Translates content from the uploaded file.
-    Note: Currently assumes file input as requested. 
+    Translates content from the uploaded file (text file expected).
+    Default: English (eng_Latn) -> Vietnamese (vie_Latn) using local NLLB model.
     """
-    # TODO: Implement actual translation logic
-    # Mock response for now
-    return TranslateResponse(translated_text="Xin chào (translated content)")
+    content = await file.read()
+    try:
+        text = translate_service(content, src_lang, tgt_lang)
+        return TranslateResponse(translated_text=text)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/crop", summary="Crop image based on bbox")
+async def crop_image(file: UploadFile = File(...), bbox: str = Form(..., description="JSON string of [x1, y1, x2, y2]")):
+    """
+    Crops the uploaded image to the specified bounding box.
+    Returns: Image bytes (image/png).
+    """
+    content = await file.read()
+    try:
+        cropped_bytes = crop_service(content, bbox)
+        return StreamingResponse(io.BytesIO(cropped_bytes), media_type="image/png")
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
