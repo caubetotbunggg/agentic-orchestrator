@@ -1,16 +1,19 @@
 """
-AgentRouter — uses local Phi-3-mini-4k-instruct to classify user intent
+AgentRouter — uses Groq API (gpt-oss-20b / gemma2-9b-it) to classify user intent
 and dispatch to the appropriate predefined graph.
 """
 import json
 import logging
+import os
 import re
 from typing import Optional
 
-import torch
+from dotenv import load_dotenv
+from groq import Groq
 
 from agent.graphs import AVAILABLE_GRAPHS
 
+load_dotenv()
 logger = logging.getLogger("uvicorn")
 
 # ---------------------------------------------------------------------------
@@ -38,55 +41,28 @@ If unsure, use "ocr_only_graph"."""
 
 
 # ---------------------------------------------------------------------------
-# PhiRouter: singleton wrapper around Phi-3-mini
+# GroqRouter: singleton wrapper around Groq API
 # ---------------------------------------------------------------------------
 
-class PhiRouter:
-    """Singleton wrapper around Phi-3-mini pipeline for intent routing."""
-    _pipeline = None
+class GroqRouter:
+    """Singleton wrapper around Groq API for intent routing."""
+    _client = None
 
     @classmethod
-    def get_pipeline(cls):
-        if cls._pipeline is None:
+    def get_client(cls):
+        if cls._client is None:
             try:
-                from transformers import pipeline as hf_pipeline, AutoModelForCausalLM, AutoTokenizer
-
-                model_name = "microsoft/Phi-3-mini-4k-instruct"
-                logger.info(f"[Router] Loading Phi-3-mini from '{model_name}'...")
-
-                device = "cpu"
-                if torch.backends.mps.is_available():
-                    device = "mps"
-                elif torch.cuda.is_available():
-                    device = 0
-
-                dtype = torch.float16 if device != "cpu" else torch.float32
-
-                # Load with attn_implementation="eager" to avoid DynamicCache/flash-attn
-                # compatibility issues on MPS with transformers 4.x
-                model = AutoModelForCausalLM.from_pretrained(
-                    model_name,
-                    torch_dtype=dtype,
-                    trust_remote_code=True,
-                    attn_implementation="eager",
-                )
-                model = model.to(device)
-
-                tokenizer = AutoTokenizer.from_pretrained(
-                    model_name,
-                    trust_remote_code=True,
-                )
-
-                cls._pipeline = hf_pipeline(
-                    "text-generation",
-                    model=model,
-                    tokenizer=tokenizer,
-                )
-                logger.info("[Router] Phi-3-mini loaded successfully.")
+                api_key = os.environ.get("GROQ_API_KEY")
+                if not api_key:
+                    logger.warning("[Router] GROQ_API_KEY not found in environment. Routing may fail.")
+                    
+                logger.info("[Router] Initializing Groq API Client for Orchestrator...")
+                cls._client = Groq(api_key=api_key)
+                
             except Exception as e:
-                logger.error(f"[Router] Failed to load Phi-3-mini: {e}")
-                cls._pipeline = None
-        return cls._pipeline
+                logger.error(f"[Router] Failed to initialize Groq API Client: {e}")
+                cls._client = None
+        return cls._client
 
 
 # ---------------------------------------------------------------------------
@@ -120,9 +96,9 @@ def classify_intent(
         "tgt_lang": tgt_lang,
     }
 
-    pipe = PhiRouter.get_pipeline()
-    if pipe is None:
-        logger.warning("[Router] Phi-3-mini unavailable, using fallback graph.")
+    client = GroqRouter.get_client()
+    if client is None:
+        logger.warning("[Router] Groq client unavailable, using fallback graph.")
         return fallback
 
     messages = [
@@ -138,24 +114,15 @@ def classify_intent(
     ]
 
     try:
-        outputs = pipe(
-            messages,
-            max_new_tokens=128,
-            do_sample=False,
-            temperature=None,
-            top_p=None,
-            use_cache=False,     # Fix: disable DynamicCache to avoid seen_tokens error on MPS
+        model = os.environ.get("GROQ_ORCHESTRATOR_MODEL", "gpt-oss-20b")
+        outputs = client.chat.completions.create(
+            messages=messages,
+            model=model,
+            temperature=0.0,
+            max_completion_tokens=128,
         )
-        # Phi-3 pipeline output: list of {generated_text: [...messages...]}
-        generated = outputs[0]["generated_text"]
-        if isinstance(generated, list):
-            assistant_msg = next(
-                (m["content"] for m in reversed(generated) if m.get("role") == "assistant"),
-                "",
-            )
-        else:
-            assistant_msg = str(generated)
-
+        
+        assistant_msg = outputs.choices[0].message.content
         logger.info(f"[Router] Raw output: {assistant_msg[:200]}")
         parsed = _parse_router_output(assistant_msg)
 
