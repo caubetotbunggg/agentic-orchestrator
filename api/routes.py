@@ -2,10 +2,12 @@ from fastapi import APIRouter, UploadFile, File, HTTPException, Form
 from fastapi.responses import StreamingResponse
 from typing import List
 import io
-from .schemas import LayoutResponse, OCRResponse, TranslateResponse, LayoutRegion, OCRTextItem
+from .schemas import LayoutResponse, OCRResponse, TranslateResponse, LayoutRegion, OCRTextItem, AgentResponse
 from engine.services import detect_layout_service, ocr_service, crop_service, translate_service
+from agent import run_agent
 
 router = APIRouter()
+
 
 @router.post("/layout-detect", response_model=LayoutResponse, summary="Detect layout regions in an image")
 async def detect_layout(file: UploadFile = File(...)):
@@ -60,5 +62,38 @@ async def crop_image(file: UploadFile = File(...), bbox: str = Form(..., descrip
         return StreamingResponse(io.BytesIO(cropped_bytes), media_type="image/png")
     except ValueError as ve:
         raise HTTPException(status_code=400, detail=str(ve))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/agent", response_model=AgentResponse, summary="Agentic document Q&A")
+async def agent_endpoint(
+    file: UploadFile = File(...),
+    prompt: str = Form(..., description="User's natural language request"),
+    src_lang: str = Form("eng_Latn", description="Source language (NLLB code)"),
+    tgt_lang: str = Form("vie_Latn", description="Target language (NLLB code)"),
+):
+    """
+    Agentic document processing endpoint.
+
+    Sends the uploaded image and a natural-language prompt to the agent.
+    The agent classifies the intent using Phi-3-mini and dispatches to one
+    of the predefined LangGraph graphs:
+
+    - **full_translate_graph** — translate all content in the image
+    - **ocr_only_graph** — extract text without translation
+    - **table_extract_graph** — extract table as structured markdown
+    - **translate_region_graph** — translate specific region/table
+
+    Returns the final output text + which graph was used + execution steps.
+    """
+    content = await file.read()
+    try:
+        result = run_agent(content, prompt, src_lang=src_lang, tgt_lang=tgt_lang)
+        if result.get("error"):
+            raise HTTPException(status_code=500, detail=result["error"])
+        return AgentResponse(**result)
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

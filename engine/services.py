@@ -13,14 +13,14 @@ except ImportError as e:
     _import_error = e
 
 try:
-    from transformers import AutoModelForSeq2SeqLM, AutoTokenizer, pipeline
-    import torch
-    _transformers_error = None
+    from groq import Groq
+    import os
+    from dotenv import load_dotenv
+    load_dotenv()
+    _groq_error = None
 except ImportError as e:
-    AutoModelForSeq2SeqLM = None
-    AutoTokenizer = None
-    torch = None
-    _transformers_error = e
+    Groq = None
+    _groq_error = e
 
 from api.schemas import LayoutRegion, OCRTextItem
 
@@ -30,8 +30,7 @@ logger = logging.getLogger("uvicorn")
 class AIEngine:
     _layout_engine = None
     _ocr_engine = None
-    _translate_model = None
-    _translate_tokenizer = None
+    _translate_client = None
 
     @classmethod
     def get_layout_engine(cls):
@@ -64,27 +63,18 @@ class AIEngine:
 
     @classmethod
     def get_translate_engine(cls):
-        if cls._translate_model is None:
-            if AutoModelForSeq2SeqLM is None:
-                raise ImportError(f"transformers/torch import failed: {_transformers_error}")
-            logger.info("Initializing NLLB-200 Translator Pipeline (Local)...")
+        if cls._translate_client is None:
+            if Groq is None:
+                raise ImportError(f"groq import failed: {_groq_error}")
             
-            model_name = "./nllb-200-distilled-600M"
-            # Fallback to HF hub if local not found, though we assume local per context.
-            # Determine device
-            device = "cpu"
-            if torch.backends.mps.is_available():
-                device = "mps"
-            elif torch.cuda.is_available():
-                device = 0
+            api_key = os.environ.get("GROQ_API_KEY")
+            if not api_key:
+                logger.warning("GROQ_API_KEY not found in environment. Translation may fail.")
+                
+            logger.info("Initializing Groq API Client for Translation...")
+            cls._translate_client = Groq(api_key=api_key)
             
-            cls._translate_model = pipeline(
-                task="translation",
-                model=model_name,
-                device=device,
-                dtype=torch.float16 if device != "cpu" else torch.float32,
-            )
-        return cls._translate_model
+        return cls._translate_client
 
 def detect_layout_service(image_file: bytes) -> list[LayoutRegion]:
     try:
@@ -188,7 +178,7 @@ def crop_service(image_file: bytes, bbox_str: str) -> bytes:
 
 def translate_service(image_file: bytes, src_lang: str = "eng_Latn", tgt_lang: str = "vie_Latn") -> str:
     try:
-        translator = AIEngine.get_translate_engine()
+        client = AIEngine.get_translate_engine()
         
         # Read text content.
         try:
@@ -199,13 +189,46 @@ def translate_service(image_file: bytes, src_lang: str = "eng_Latn", tgt_lang: s
         if not text.strip():
             return ""
 
-        # Use pipeline with forced languages
-        output = translator(text, src_lang=src_lang, tgt_lang=tgt_lang)
-        # Output format for translation pipeline is usually [{'translation_text': '...'}] except if returns_text=True? 
-        # Actually standard pipeline returns list of dicts.
-        if output and isinstance(output, list) and "translation_text" in output[0]:
-            return output[0]["translation_text"]
-        return str(output)
+        # Construct prompt
+        system_prompt = f"""You are a professional translation engine.
+
+Task:
+Translate the given text from {src_lang} to {tgt_lang}.
+
+Rules:
+- Preserve the original meaning exactly.
+- Do NOT add explanations.
+- Do NOT add commentary.
+- Do NOT summarize.
+- Do NOT change formatting unless necessary.
+- Keep names, numbers, URLs, and code unchanged.
+- If the input text is empty, return an empty string.
+
+Return ONLY the translated text.
+
+Text:
+\"\"\"
+{text}
+\"\"\"
+"""
+        
+        model = os.environ.get("GROQ_MODEL")
+        
+        response = client.chat.completions.create(
+            messages=[
+                {
+                    "role": "user",
+                    "content": system_prompt,
+                }
+            ],
+            model=model,
+            temperature=0.0,
+            max_completion_tokens=4096,
+        )
+        
+        translated_text = response.choices[0].message.content
+        return translated_text.strip()
+
 
     except Exception as e:
         logger.error(f"Translation failed: {e}")

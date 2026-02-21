@@ -22,3 +22,11 @@ class OCRResponse(BaseModel):
 # --- Translate Models ---
 class TranslateResponse(BaseModel):
     translated_text: str
+
+# --- Agent Models ---
+class AgentResponse(BaseModel):
+    output: str = Field(..., description="Final output text from the agent")
+    graph_used: str = Field(..., description="Name of the graph that was executed")
+    steps: List[str] = Field(default_factory=list, description="Execution steps log")
+    error: Optional[str] = Field(None, description="Error message if failed")
+
