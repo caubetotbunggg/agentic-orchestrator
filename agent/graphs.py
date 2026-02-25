@@ -7,10 +7,16 @@ Graphs:
     3. table_extract_graph    — layout → filter(table) → crop → OCR → parse markdown table
     4. translate_region_graph — layout → pick best region → crop → OCR → translate
 """
+import json
 import logging
-from typing import List
+import os
+from typing import List, Annotated
 
+from langchain_core.messages import SystemMessage, HumanMessage
+from langchain_core.tools import tool
+from langchain_groq import ChatGroq
 from langgraph.graph import StateGraph, END
+from langgraph.prebuilt import create_react_agent, InjectedState
 
 from agent.state import AgentState
 from tools.document_tools import (
@@ -300,6 +306,97 @@ def build_translate_region_graph() -> StateGraph:
 
 
 # ============================================================
+# Graph 5: planner_graph (Hybrid LLM Orchestrator)
+# ============================================================
+
+@tool
+def plan_layout_detect(state: Annotated[dict, InjectedState]) -> str:
+    """Detect layout regions (text, table, figure, ...) in the uploaded image. Returns a JSON list of regions with type and bbox."""
+    regions = tool_layout_detect(state["image_bytes"])
+    return json.dumps([{"type": r.type, "bbox": r.bbox} for r in regions])
+
+@tool
+def plan_ocr_full(state: Annotated[dict, InjectedState]) -> str:
+    """Extract all text items from the entire uploaded image. Returns merged text string."""
+    items = tool_ocr(state["image_bytes"])
+    return tool_merge_text(items)
+
+@tool
+def plan_ocr_bbox(bbox: List[int], state: Annotated[dict, InjectedState]) -> str:
+    """Crop the main image to the given [x1, y1, x2, y2] bbox and extract text. Returns merged string."""
+    crop_bytes = tool_crop(state["image_bytes"], bbox)
+    items = tool_ocr(crop_bytes)
+    return tool_merge_text(items)
+
+@tool
+def plan_parse_table(bbox: List[int], state: Annotated[dict, InjectedState]) -> str:
+    """Crop the main image to the given bbox, run OCR, and parse into a markdown table."""
+    crop_bytes = tool_crop(state["image_bytes"], bbox)
+    items = tool_ocr(crop_bytes)
+    return tool_parse_table(items)
+
+@tool
+def plan_translate(text: str, src_lang: str, tgt_lang: str) -> str:
+    """Translate text using the translation service. Use NLLB language codes (e.g., eng_Latn, vie_Latn)."""
+    return tool_translate(text, src_lang=src_lang, tgt_lang=tgt_lang)
+
+
+def build_planner_graph() -> StateGraph:
+    llm = ChatGroq(model=os.environ.get("GROQ_ORCHESTRATOR_MODEL", "gpt-oss-20b"), temperature=0.0)
+    tools = [
+        plan_layout_detect,
+        plan_ocr_full,
+        plan_ocr_bbox,
+        plan_parse_table,
+        plan_translate
+    ]
+    
+    react_agent = create_react_agent(llm, tools, state_schema=AgentState)
+    
+    def prepare_planner(state: AgentState) -> dict:
+        prompt = state.get("prompt", "")
+        src = state.get("src_lang", "")
+        tgt = state.get("tgt_lang", "")
+        sys_msg = (
+            "You are a dynamic document processing planner. "
+            "You have access to tools to analyze an uploaded image. "
+            f"The user wants: '{prompt}'. "
+            f"Expected languages: source={src}, target={tgt}. "
+            "Execute the necessary tools to analyze the document. "
+            "Once you have gathered the required information, provide the final comprehensive answer to the user."
+        )
+        steps = list(state.get("steps", []))
+        steps.append("planner_graph → start")
+        # Initialize messages for ReAct agent
+        return {
+            "messages": [
+                SystemMessage(content=sys_msg),
+                HumanMessage(content=prompt)
+            ],
+            "steps": steps
+        }
+        
+    def extract_planner_output(state: AgentState) -> dict:
+        # The last message is the AI's final answer
+        final_msg = state["messages"][-1].content
+        steps = list(state.get("steps", []))
+        steps.append("planner_graph → finished")
+        return {"final_output": final_msg, "steps": steps}
+        
+    g = StateGraph(AgentState)
+    g.add_node("prepare", prepare_planner)
+    g.add_node("react_agent", react_agent)
+    g.add_node("extract", extract_planner_output)
+    
+    g.set_entry_point("prepare")
+    g.add_edge("prepare", "react_agent")
+    g.add_edge("react_agent", "extract")
+    g.add_edge("extract", END)
+    
+    return g.compile()
+
+
+# ============================================================
 # Registry: compiled graph instances (lazy initialized)
 # ============================================================
 
@@ -315,6 +412,7 @@ def get_graph(name: str):
             "ocr_only_graph": build_ocr_only_graph,
             "table_extract_graph": build_table_extract_graph,
             "translate_region_graph": build_translate_region_graph,
+            "planner_graph": build_planner_graph,
         }
         if name not in builders:
             raise ValueError(f"Unknown graph: {name}. Available: {list(builders.keys())}")
@@ -327,4 +425,5 @@ AVAILABLE_GRAPHS = [
     "ocr_only_graph",
     "table_extract_graph",
     "translate_region_graph",
+    "planner_graph",
 ]

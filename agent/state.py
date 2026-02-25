@@ -2,7 +2,9 @@
 AgentState — shared state passed between nodes in a LangGraph graph.
 """
 from typing import Any, Dict, List, Optional
-from typing_extensions import TypedDict
+from typing_extensions import TypedDict, Annotated
+from langgraph.graph.message import add_messages
+from langchain_core.messages import BaseMessage
 
 from api.schemas import LayoutRegion, OCRTextItem
 
@@ -31,3 +33,8 @@ class AgentState(TypedDict, total=False):
     final_output: str                   # The answer returned to the user
     steps: List[str]                    # Log of steps executed (for debugging)
     error: Optional[str]                # Error message if something failed
+
+    # ---- Planner Agent State ----
+    messages: Annotated[list[BaseMessage], add_messages] # Message history for LLM planner
+    is_last_step: bool                  # LangGraph prebuilt require this
+    remaining_steps: int                # LangGraph prebuilt require this

@@ -33,11 +33,12 @@ Available graphs:
 - "ocr_only_graph": User wants to read/extract text from the image without translation.
 - "table_extract_graph": User wants to see table data as a structured table (not translated).
 - "translate_region_graph": User wants to translate a specific region/table/section.
+- "planner_graph": User request is complex, ambiguous, or doesn't perfectly fit the predefined templates above. 
 
 Default languages: src_lang="eng_Latn", tgt_lang="vie_Latn" unless user specifies otherwise.
 Common language codes: Vietnamese=vie_Latn, English=eng_Latn, French=fra_Latn,
   Chinese=zho_Hans, Japanese=jpn_Jpan, Korean=kor_Hang.
-If unsure, use "ocr_only_graph"."""
+If unsure, use "planner_graph"."""
 
 
 # ---------------------------------------------------------------------------
@@ -88,10 +89,10 @@ def classify_intent(
     """
     Classify the user prompt → returns dict with:
         graph: str, src_lang: str, tgt_lang: str
-    Falls back to "ocr_only_graph" if model unavailable or parse fails.
+    Falls back to "planner_graph" if model unavailable or parse fails.
     """
     fallback = {
-        "graph": "ocr_only_graph",
+        "graph": "planner_graph",
         "src_lang": src_lang,
         "tgt_lang": tgt_lang,
     }
