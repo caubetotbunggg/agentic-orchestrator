@@ -12,7 +12,7 @@ router = APIRouter()
 @router.post("/layout-detect", response_model=LayoutResponse, summary="Detect layout regions in an image")
 async def detect_layout(file: UploadFile = File(...)):
     """
-    Detects layout regions using PP-DocLayoutV2 (via PP-Structure).
+    Detects layout regions using PP-StructureV2.
     """
     content = await file.read()
     try:
@@ -24,7 +24,7 @@ async def detect_layout(file: UploadFile = File(...)):
 @router.post("/ocr", response_model=OCRResponse, summary="Extract text from an image")
 async def perform_ocr(file: UploadFile = File(...)):
     """
-    Extracts text from the uploaded image using PP-OCRv5 (standardized to PP-OCRv4/latest).
+    Extracts text from the uploaded image using PP-OCRv4 (English).
     """
     content = await file.read()
     try:
@@ -41,7 +41,7 @@ async def translate_content(
 ):
     """
     Translates content from the uploaded file (text file expected).
-    Default: English (eng_Latn) -> Vietnamese (vie_Latn) using local NLLB model.
+    Default: English (eng_Latn) -> Vietnamese (vie_Latn) using the configured Groq model.
     """
     content = await file.read()
     try:
@@ -77,7 +77,7 @@ async def agent_endpoint(
     Agentic document processing endpoint.
 
     Sends the uploaded image and a natural-language prompt to the agent.
-    The agent classifies the intent using Phi-3-mini and dispatches to one
+    The agent classifies the intent using Groq and dispatches to one
     of the predefined LangGraph graphs:
 
     - **full_translate_graph** — translate all content in the image

@@ -1,5 +1,5 @@
 """
-AgentRouter — uses Groq API (gpt-oss-20b / gemma2-9b-it) to classify user intent
+AgentRouter — uses Groq API to classify user intent
 and dispatch to the appropriate predefined graph.
 """
 import json
@@ -114,7 +114,7 @@ def classify_intent(
     ]
 
     try:
-        model = os.environ.get("GROQ_ORCHESTRATOR_MODEL", "gpt-oss-20b")
+        model = os.environ.get("GROQ_ORCHESTRATOR_MODEL", "openai/gpt-oss-20b")
         outputs = client.chat.completions.create(
             messages=messages,
             model=model,

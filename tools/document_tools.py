@@ -98,7 +98,7 @@ def tool_merge_text(items: List[OCRTextItem]) -> str:
 # ---------------------------------------------------------------------------
 
 def tool_translate(text: str, src_lang: str = "eng_Latn", tgt_lang: str = "vie_Latn") -> str:
-    """Translate text using the local NLLB-200 model."""
+    """Translate text using the configured Groq model."""
     if not text.strip():
         return ""
     with _timed(f"translate({src_lang}→{tgt_lang})"):

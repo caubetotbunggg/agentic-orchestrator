@@ -1,7 +1,7 @@
 [project]
-name = "prj3"
+name = "agentic-orchestrator"
 version = "0.1.0"
-description = "Add your description here"
+description = "LangGraph document workflows for layout analysis, OCR, table extraction, and Groq translation."
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [

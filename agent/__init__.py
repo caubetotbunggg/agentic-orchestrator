@@ -17,7 +17,7 @@ def run_agent(
 ) -> dict:
     """
     Run the agent pipeline:
-      1. Classify intent via Phi-3-mini router
+      1. Classify intent via the Groq router
       2. Dispatch to the appropriate predefined graph
       3. Return final_output + metadata
 
